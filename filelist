@@ -1,0 +1,4 @@
+makefile
+query_device.c
+/usr/include/infiniband/verbs.h
+/usr/include/infiniband/verbs_exp.h
