@@ -12,6 +12,10 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
+#define SSY_IBV_PORTNUM 1
+#define SSY_TCP_PORTNUM 666
+#define SSY_QKEY  0
+
 void print_ibv_node_type(enum ibv_node_type node_type) {
 	printf("node_type : %s\n",ibv_node_type_str(node_type));
 	//switch(node_type) {
@@ -300,29 +304,87 @@ void print_ibv_context(struct ibv_device * pdev,struct ibv_context * pctx) {
 		}
 }
 
-int wait4int(int listenfd) {
-	while(1) {
-		int confd = accept(listenfd,(struct sockaddr *)NULL,NULL);
-		if(confd == -1) {
-			fprintf(stderr,"Error : accept socket error : %s(errno : %d)",strerror(errno),errno);
-			continue;
-		}
-		int i;
-		int sz = recv(confd,&i,sizeof(int),0);
-		assert(sz=sizeof(int));
-		close(confd);
-		return i;
-	}
+uint16_t getLid(struct ibv_context * pctx ) {
+	struct ibv_device_attr dev_attr;
+	ibv_query_device(pctx,&dev_attr);
+	assert(dev_attr.phys_port_cnt == 1);
+ 	struct ibv_port_attr pa;
+ 	int resp = ibv_query_port(pctx,1,&pa);
+	assert(resp==0);
+	return pa.lid;
 }
 
-void gotparam(int isServer, char* servername) {
+void wait4data(int fd, void* pdata,int len) {
+	int sz = recv(fd,pdata,len,0);
+	assert(sz=len);
+	return ;
+}
+
+void getReady (uint32_t qpn_peer,uint32_t psn_peer,uint32_t psn,uint16_t lid_peer,struct ibv_qp * pqp) {
+	struct ibv_qp_attr attr;
+	memset(&attr,0,sizeof(attr));
+
+	//first set to init
+	attr.qp_state = IBV_QPS_INIT;
+	attr.pkey_index = 0;
+	//this number can not be luan she, for example 6 leads to error
+	attr.port_num = SSY_IBV_PORTNUM;//there is another port_num in ah_attr
+	attr.qp_access_flags = 0;
+	int resmod = ibv_modify_qp(pqp, &attr,IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS);
+	if(resmod != 0) {
+		printf("FATAL : resmod %d\n",resmod);
+		printf("FATAL : EINVAL %d\n",EINVAL);
+		printf("FATAL : ENOMEM %d\n",ENOMEM);
+		printf("errno string : %s\n",strerror(errno));
+		fflush(stdout);
+		assert(0);
+	}
+
+	//then set to RTR
+	memset(&attr,0,sizeof(attr));
+	attr.qp_state = IBV_QPS_RTR;
+	attr.path_mtu = IBV_MTU_4096;
+	attr.dest_qp_num = qpn_peer;
+	attr.rq_psn = psn_peer;
+	attr.max_dest_rd_atomic= 1;
+	attr.min_rnr_timer= 12;
+	attr.ah_attr.is_global = 0; // this is the GTH
+	attr.ah_attr.dlid      = lid_peer ;
+	attr.ah_attr.sl = 1; // this should be set in the MPI middle ware
+	attr.ah_attr.src_path_bits = 0; // this is the source routing
+	attr.ah_attr.port_num = SSY_IBV_PORTNUM;
+
+	resmod = ibv_modify_qp(pqp,&attr,IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN | IBV_QP_RQ_PSN | IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER);
+	if(resmod != 0) {
+		printf("FATAL : resmod %d\n",resmod);
+		printf("FATAL : EINVAL %d\n",EINVAL);
+		printf("FATAL : ENOMEM %d\n",ENOMEM);
+		printf("errno string : %s\n",strerror(errno));
+		fflush(stdout);
+		assert(0);
+	}
+
+	//finally to RTS
+	memset(&attr,0,sizeof(attr));
+	attr.qp_state = IBV_QPS_RTS;
+	attr.timeout = 14;
+	attr.retry_cnt =7;
+	attr.rnr_retry = 7;
+	attr.sq_psn = psn;
+	attr.max_rd_atomic =1;
+
+	resmod = ibv_modify_qp(pqp,&attr,IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT | IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC); //these alst masks are used to tell the stack that the field to be modified
+	assert(resmod == 0);
+}
+
+int initSocket(int isServer, char* servername,int * pconfd) {
 	int listenfd=socket(AF_INET , SOCK_STREAM ,0);
 	assert(listenfd != -1);
 
 	struct sockaddr_in servaddr;
 	memset(&servaddr , 0 , sizeof(servaddr));
 	servaddr.sin_family = AF_INET ;
-	servaddr.sin_port = htons(6666);
+	servaddr.sin_port = htons(SSY_TCP_PORTNUM);
 
 	if(isServer) {
 		servaddr.sin_addr.s_addr = htonl(INADDR_ANY) ;
@@ -333,67 +395,129 @@ void gotparam(int isServer, char* servername) {
 		int listenres = listen(listenfd,100);
 		assert(listenres != -1);
 
-		int waitres = wait4int(listenfd);
-		printf("got int %d\n",waitres);
+		int confd = accept(listenfd,(struct sockaddr *)NULL,NULL);
+		assert(confd != -1);
+		*pconfd=confd;
+		return listenfd;
 	} else {
 		//client
 		int ptonres = inet_pton(AF_INET , servername, & servaddr.sin_addr);
 		assert(ptonres >0);
 		int connres = connect(listenfd,(struct sockaddr*)&servaddr,sizeof(servaddr));
 		assert(connres>=0);
-		int sendi = 100;
-		assert(send(listenfd,&sendi,sizeof(int),0)>=0);
+		return listenfd;
 	}
-	close(listenfd);
 }
 
-void rdma(char * devname,int isServer, char* servername) {
-	
+void getDevice(char * devname,struct ibv_device ** ppActiveDev,struct ibv_device *** pppdev) {
 	int num_dev;
-	struct ibv_device * pActiveDev =NULL;
 	struct ibv_device ** ppdev = ibv_get_device_list(&num_dev);
 	//the list of dev
 	for(int i=num_dev-1;i>=0;i--) {
 		if(strcmp(ppdev[i]->name,devname) == 0) {
-			pActiveDev = ppdev[i];
+			*ppActiveDev = ppdev[i];
 			break;
 		}
 	}
-	assert(pActiveDev);
-	
+	assert(*ppActiveDev);
+	*pppdev=ppdev;
+}
+
+void rdma(char * devname,int isServer, char* servername, int fd) {
+	printf("RDMA 1\n");
+	struct ibv_device * pActiveDev;
+	struct ibv_device ** ppdev;
+	getDevice(devname,&pActiveDev,&ppdev);
 	struct ibv_context * pctx = ibv_open_device(pActiveDev);
 	
-	{
-		//allocate pd
+	{ //allocate pd
 		struct ibv_pd * ppd;
 		ppd = ibv_alloc_pd(pctx);
 		assert(ppd);
 		assert(ppd->context == pctx);
 
-		{
-			//memory alloc
+		{ //memory alloc
 			int bufsize = 1024;
 			void * pbuf = malloc(bufsize);
 
-			{
-				//working on memory registering
+			{ //memory registering
 				int perm = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_ATOMIC | IBV_ACCESS_MW_BIND | IBV_ACCESS_ZERO_BASED;
 				struct ibv_mr * pmr = ibv_reg_mr(ppd,pbuf,bufsize,perm);
 
-				{
-					//completion channel
+				{ //completion channel
 					struct ibv_comp_channel * pCompCh  = ibv_create_comp_channel( pctx );
 					assert(pCompCh);
 
-					{
-						//completion queue
+					{ //completion queue
 						int cqe_num = 1024 ;
 						struct ibv_cq * pcq = ibv_create_cq(pctx,cqe_num , NULL ,  // NULL means no private cq_context
 																			pCompCh ,0  // 0 means empty vector
 																			);
 						assert(pcq);
 
+						{ // creating qp
+							struct ibv_qp_init_attr qpinitattr;
+							memset(&qpinitattr,0,sizeof(struct ibv_qp_init_attr));
+							qpinitattr.send_cq = pcq;
+							qpinitattr.recv_cq = pcq;
+							qpinitattr.cap.max_send_wr = 1;
+							qpinitattr.cap.max_recv_wr = 100;
+							qpinitattr.cap.max_send_sge = 1;
+							qpinitattr.cap.max_recv_sge = 1;
+							qpinitattr.qp_type = IBV_QPT_RC;
 
+							struct ibv_qp * pqp = ibv_create_qp(ppd,&qpinitattr);
+
+							//get related lid and qpn for communicated between each other
+							uint16_t lid= getLid(pctx);
+							uint32_t qpn = pqp->qp_num;
+							uint32_t psn = lrand48() & 0xffffff;
+							printf("local lid : %d\n",lid);
+							printf("local qpn : %d\n",qpn);
+							printf("local psn : %d\n",psn);
+							if(!isServer) { //client
+								assert(send(fd,&lid,sizeof(lid),0));
+								assert(send(fd,&qpn,sizeof(qpn),0));
+								assert(send(fd,&psn,sizeof(psn),0));
+
+								//todo the same
+							} else { //server
+								uint16_t lid_peer;
+								wait4data(fd,&lid_peer,sizeof(lid_peer));
+								printf("server receive client lid : %d\n",lid_peer);
+								uint32_t qpn_peer;
+								wait4data(fd,&qpn_peer,sizeof(qpn_peer));
+								printf("server receive client qpn : %d\n",qpn_peer);
+								uint32_t psn_peer;
+								wait4data(fd,&psn_peer,sizeof(psn_peer));
+								printf("server receive client psn : %d\n",psn_peer);
+
+								//connect
+								getReady(qpn_peer,psn_peer,psn,lid_peer,pqp);
+
+								//send
+								struct ibv_sge sge;
+								memset(&sge,0,sizeof(struct ibv_sge));
+								sge.addr = (uintptr_t)pbuf;
+								sge.length = bufsize;
+								sge.lkey = pmr->lkey;
+
+								struct ibv_send_wr wr;
+								memset(&wr,0,sizeof(struct ibv_send_wr));
+								wr.next = NULL; //this is used in linked list in driver, I dont use it
+								wr.sg_list = &sge;
+								wr.num_sge = 1;
+								wr.opcode = IBV_WR_SEND;
+
+								struct ibv_send_wr * pbadwr;
+								int ressend = ibv_post_send(pqp,&wr,&pbadwr);
+								assert(ressend == 0);
+							}
+
+							int resdesqp = ibv_destroy_qp(pqp);
+							assert(resdesqp==0);
+							
+						}
 
 						int rescq = ibv_destroy_cq(pcq);
 						assert(rescq == 0);
@@ -454,15 +578,20 @@ int main(int argc, char** argv) {
 		int isServer;
 		char * pServerHostNmae = NULL;
 		assert(argc>=4);
-		if(strcmp(argv[3],"server")==0) 
+		if(strcmp(argv[3],"server")==0)  {
 			isServer = 1 ;
-		else if (strcmp(argv[3],"client") == 0) {
+		} else if (strcmp(argv[3],"client") == 0) {
 			assert(argc>=5);
 			isServer = 0 ;
 			pServerHostNmae = argv[4];
 		} else assert(0);
-		gotparam(isServer,pServerHostNmae);
-		//rdma(argv[2],isServer,pServerHostNmae);
+		int confd;
+		int fd = initSocket(isServer,pServerHostNmae,&confd);
+		rdma(argv[2],isServer,pServerHostNmae,isServer?confd:fd);
+		if(isServer) 
+			close(confd);
+
+		close(fd);
 	} else 
 		assert(0);
 	
