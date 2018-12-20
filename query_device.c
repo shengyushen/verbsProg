@@ -2,8 +2,15 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <string.h>
+#include <unistd.h>
+
 #include <infiniband/verbs.h>
 #include <infiniband/verbs_exp.h>
+
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 void print_ibv_node_type(enum ibv_node_type node_type) {
 	printf("node_type : %s\n",ibv_node_type_str(node_type));
@@ -293,7 +300,67 @@ void print_ibv_context(struct ibv_device * pdev,struct ibv_context * pctx) {
 		}
 }
 
-void work(struct ibv_device * pActiveDev) {
+int wait4int(int listenfd) {
+	while(1) {
+		int confd = accept(listenfd,(struct sockaddr *)NULL,NULL);
+		if(confd == -1) {
+			fprintf(stderr,"Error : accept socket error : %s(errno : %d)",strerror(errno),errno);
+			continue;
+		}
+		int i;
+		int sz = recv(confd,&i,sizeof(int),0);
+		assert(sz=sizeof(int));
+		close(confd);
+		return i;
+	}
+}
+
+void gotparam(int isServer, char* servername) {
+	int listenfd=socket(AF_INET , SOCK_STREAM ,0);
+	assert(listenfd != -1);
+
+	struct sockaddr_in servaddr;
+	memset(&servaddr , 0 , sizeof(servaddr));
+	servaddr.sin_family = AF_INET ;
+	servaddr.sin_port = htons(6666);
+
+	if(isServer) {
+		servaddr.sin_addr.s_addr = htonl(INADDR_ANY) ;
+		
+		int bindres=bind(listenfd , (struct sockaddr *)&servaddr,sizeof(servaddr));
+		assert(bindres != -1);
+
+		int listenres = listen(listenfd,100);
+		assert(listenres != -1);
+
+		int waitres = wait4int(listenfd);
+		printf("got int %d\n",waitres);
+	} else {
+		//client
+		int ptonres = inet_pton(AF_INET , servername, & servaddr.sin_addr);
+		assert(ptonres >0);
+		int connres = connect(listenfd,(struct sockaddr*)&servaddr,sizeof(servaddr));
+		assert(connres>=0);
+		int sendi = 100;
+		assert(send(listenfd,&sendi,sizeof(int),0)>=0);
+	}
+	close(listenfd);
+}
+
+void rdma(char * devname,int isServer, char* servername) {
+	
+	int num_dev;
+	struct ibv_device * pActiveDev =NULL;
+	struct ibv_device ** ppdev = ibv_get_device_list(&num_dev);
+	//the list of dev
+	for(int i=num_dev-1;i>=0;i--) {
+		if(strcmp(ppdev[i]->name,devname) == 0) {
+			pActiveDev = ppdev[i];
+			break;
+		}
+	}
+	assert(pActiveDev);
+	
 	struct ibv_context * pctx = ibv_open_device(pActiveDev);
 	
 	{
@@ -313,7 +380,28 @@ void work(struct ibv_device * pActiveDev) {
 				int perm = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_ATOMIC | IBV_ACCESS_MW_BIND | IBV_ACCESS_ZERO_BASED;
 				struct ibv_mr * pmr = ibv_reg_mr(ppd,pbuf,bufsize,perm);
 
-				
+				{
+					//completion channel
+					struct ibv_comp_channel * pCompCh  = ibv_create_comp_channel( pctx );
+					assert(pCompCh);
+
+					{
+						//completion queue
+						int cqe_num = 1024 ;
+						struct ibv_cq * pcq = ibv_create_cq(pctx,cqe_num , NULL ,  // NULL means no private cq_context
+																			pCompCh ,0  // 0 means empty vector
+																			);
+						assert(pcq);
+
+
+
+						int rescq = ibv_destroy_cq(pcq);
+						assert(rescq == 0);
+					}
+
+					int resch = ibv_destroy_comp_channel(pCompCh);
+					assert(resch==0);
+				}
 				
 				int resMr = ibv_dereg_mr(pmr);
 				assert(resMr==0);
@@ -327,31 +415,56 @@ void work(struct ibv_device * pActiveDev) {
 	}
 
 	ibv_close_device(pctx);
+	ibv_free_device_list(ppdev);
 }
 
-int main(int argc, char** argv) {
+void check_status() {
 	int num_dev;
-	struct ibv_device ** ppdev;
-
-	ppdev = ibv_get_device_list(&num_dev);
+	struct ibv_device ** ppdev = ibv_get_device_list(&num_dev);
 	printf("num_dev %d\n",num_dev);
 	
 	//the list of dev
-	//for(int i=num_dev-1;i>=0;i--) {
-	//	printf("============= Dev %s ===============\n",ppdev[i]->name);
-	//	print_ibv_device(ppdev[i]);
+	for(int i=num_dev-1;i>=0;i--) {
+		printf("============= Dev %s ===============\n",ppdev[i]->name);
+		print_ibv_device(ppdev[i]);
 
-	//	struct ibv_context * pctx = ibv_open_device(ppdev[i]);
-	//	print_ibv_context(ppdev[i],pctx);
-	//	ibv_close_device(pctx);
+		struct ibv_context * pctx = ibv_open_device(ppdev[i]);
+		print_ibv_context(ppdev[i],pctx);
+		ibv_close_device(pctx);
 
-	//	printf("\n");
-	//}
-
-	//allocate context
-	int active_dev_num=0;
-	work(ppdev[active_dev_num]);
-	
+		printf("\n");
+	}
 	ibv_free_device_list(ppdev);
+}
+
+
+int main(int argc, char** argv) {
+	if(argc<2) {
+		printf("Usage : query_device.exe <operation type> ...\n");
+		printf("        chk\n");
+		printf("        rdma <ib dev name> server\n");
+		printf("        rdma <ib dev name> client <server host name>\n");
+		return 0;
+	}
+	//check status
+	if(strcmp(argv[1],"chk") == 0)
+		check_status();
+	else if(strcmp(argv[1],"rdma") == 0) {
+	//allocate context
+		int isServer;
+		char * pServerHostNmae = NULL;
+		assert(argc>=4);
+		if(strcmp(argv[3],"server")==0) 
+			isServer = 1 ;
+		else if (strcmp(argv[3],"client") == 0) {
+			assert(argc>=5);
+			isServer = 0 ;
+			pServerHostNmae = argv[4];
+		} else assert(0);
+		gotparam(isServer,pServerHostNmae);
+		//rdma(argv[2],isServer,pServerHostNmae);
+	} else 
+		assert(0);
+	
 }
 
