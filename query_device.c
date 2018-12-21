@@ -347,7 +347,7 @@ void getReady (uint32_t qpn_peer,uint32_t psn_peer,uint32_t psn,uint16_t lid_pee
 	attr.dest_qp_num = qpn_peer;
 	attr.rq_psn = psn_peer;
 	attr.max_dest_rd_atomic= 1;
-	attr.min_rnr_timer= 12;
+	attr.min_rnr_timer= 12; // this is recommandded
 	attr.ah_attr.is_global = 0; // this is the GTH
 	attr.ah_attr.dlid      = lid_peer ;
 	attr.ah_attr.sl = 1; // this should be set in the MPI middle ware
@@ -398,15 +398,14 @@ int initSocket(int isServer, char* servername,int * pconfd) {
 		int confd = accept(listenfd,(struct sockaddr *)NULL,NULL);
 		assert(confd != -1);
 		*pconfd=confd;
-		return listenfd;
 	} else {
 		//client
 		int ptonres = inet_pton(AF_INET , servername, & servaddr.sin_addr);
 		assert(ptonres >0);
 		int connres = connect(listenfd,(struct sockaddr*)&servaddr,sizeof(servaddr));
 		assert(connres>=0);
-		return listenfd;
 	}
+	return listenfd;
 }
 
 void getDevice(char * devname,struct ibv_device ** ppActiveDev,struct ibv_device *** pppdev) {
@@ -436,10 +435,43 @@ void ssysend(void * pbuf,int bufsize, struct ibv_mr * pmr,struct ibv_qp * pqp) {
 	wr.sg_list = &sge;
 	wr.num_sge = 1;
 	wr.opcode = IBV_WR_SEND;
+	wr.send_flags = IBV_SEND_SIGNALED; // this will generate a cqe
 
 	struct ibv_send_wr * pbadwr;
 	int ressend = ibv_post_send(pqp,&wr,&pbadwr);
 	assert(ressend == 0);
+}
+
+void ssyrecv(void * pbuf,int bufsize,struct ibv_mr * pmr,struct ibv_qp * pqp) {
+	struct ibv_sge sge;
+	memset(&sge,0,sizeof(sge));
+	sge.addr = (uintptr_t)pbuf;
+	sge.length = bufsize;
+	sge.lkey = pmr->lkey;
+
+	struct ibv_recv_wr  wr;
+	memset(&wr,0,sizeof(wr));
+	wr.next = NULL; //this is used in linked list in driver, I dont use it
+	wr.sg_list = &sge;
+	wr.num_sge = 1;
+	struct ibv_recv_wr * pbadwr;
+	int resrecv = ibv_post_recv(pqp,&wr,&pbadwr);
+	assert (resrecv ==0);
+}
+void socketExchange(void * pbufSend,int bufsizeSend,void * pbufRecv,int bufsizeRecv,int fd) {
+	assert(send(fd,pbufSend,bufsizeSend,0));
+	wait4data(fd,pbufRecv,bufsizeRecv);
+}
+
+void wait4Comp(struct ibv_cq * pcq) {
+	struct ibv_wc wc;
+	int num_comp;
+	do {
+		num_comp = ibv_poll_cq(pcq,1,&wc);
+	} while(num_comp == 0);
+
+	assert(num_comp >=0);
+	assert(wc.status == IBV_WC_SUCCESS);
 }
 
 void rdma(char * devname,int isServer, char* servername, int fd) {
@@ -494,30 +526,42 @@ void rdma(char * devname,int isServer, char* servername, int fd) {
 							printf("local lid : %d\n",lid);
 							printf("local qpn : %d\n",qpn);
 							printf("local psn : %d\n",psn);
+
+							uint16_t lid_peer;
+							uint32_t qpn_peer;
+							uint32_t psn_peer;
+							socketExchange(&lid,sizeof(lid),&lid_peer,sizeof(lid_peer),fd);
+							socketExchange(&qpn,sizeof(qpn),&qpn_peer,sizeof(qpn_peer),fd);
+							socketExchange(&psn,sizeof(psn),&psn_peer,sizeof(psn_peer),fd);
+
+							printf("receive lid : %d\n",lid_peer);
+							printf("receive qpn : %d\n",qpn_peer);
+							printf("receive psn : %d\n",psn_peer);
+
+							//connect
+							getReady(qpn_peer,psn_peer,psn,lid_peer,pqp);
 							if(!isServer) { //client
-								assert(send(fd,&lid,sizeof(lid),0));
-								assert(send(fd,&qpn,sizeof(qpn),0));
-								assert(send(fd,&psn,sizeof(psn),0));
-
 								//receive
-								
+								//sleep(5);
+								ssyrecv(pbuf,bufsize,pmr,pqp);
+								wait4Comp(pcq);
+								printf("RDMA receiving \n");
+								for(int i=0;i<bufsize;i++) {
+									//printf("pos %d is %d\n",i,((uint8_t *)pbuf)[i]);
+									assert((i%256) == ((uint8_t *)pbuf)[i]);
+								}
 							} else { //server
-								uint16_t lid_peer;
-								wait4data(fd,&lid_peer,sizeof(lid_peer));
-								printf("server receive client lid : %d\n",lid_peer);
-								uint32_t qpn_peer;
-								wait4data(fd,&qpn_peer,sizeof(qpn_peer));
-								printf("server receive client qpn : %d\n",qpn_peer);
-								uint32_t psn_peer;
-								wait4data(fd,&psn_peer,sizeof(psn_peer));
-								printf("server receive client psn : %d\n",psn_peer);
-
-								//connect
-								getReady(qpn_peer,psn_peer,psn,lid_peer,pqp);
-
 								//send
+								for(int i=0;i<bufsize;i++) {
+									((uint8_t *)pbuf)[i]=i%256;
+									//printf("server pos %d is %d\n",i,((uint8_t *)pbuf)[i]);
+								}
 								ssysend(pbuf,bufsize,pmr,pqp);
-
+								for(int i=0;i<bufsize;i++) {
+									assert((i%256) == ((uint8_t *)pbuf)[i]);
+								}
+								printf("server finish sending,waiting for completion\n");
+								wait4Comp(pcq);
 							}
 
 							int resdesqp = ibv_destroy_qp(pqp);
@@ -598,6 +642,10 @@ int main(int argc, char** argv) {
 			close(confd);
 
 		close(fd);
+		if(isServer)
+			printf("server exit\n");
+		else
+			printf("client exit\n");
 	} else 
 		assert(0);
 	
