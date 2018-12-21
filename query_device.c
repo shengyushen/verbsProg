@@ -423,6 +423,25 @@ void getDevice(char * devname,struct ibv_device ** ppActiveDev,struct ibv_device
 	*pppdev=ppdev;
 }
 
+void ssysend(void * pbuf,int bufsize, struct ibv_mr * pmr,struct ibv_qp * pqp) {
+	struct ibv_sge sge;
+	memset(&sge,0,sizeof(sge));
+	sge.addr = (uintptr_t)pbuf;
+	sge.length = bufsize;
+	sge.lkey = pmr->lkey;
+
+	struct ibv_send_wr wr;
+	memset(&wr,0,sizeof(wr));
+	wr.next = NULL; //this is used in linked list in driver, I dont use it
+	wr.sg_list = &sge;
+	wr.num_sge = 1;
+	wr.opcode = IBV_WR_SEND;
+
+	struct ibv_send_wr * pbadwr;
+	int ressend = ibv_post_send(pqp,&wr,&pbadwr);
+	assert(ressend == 0);
+}
+
 void rdma(char * devname,int isServer, char* servername, int fd) {
 	printf("RDMA 1\n");
 	struct ibv_device * pActiveDev;
@@ -480,7 +499,8 @@ void rdma(char * devname,int isServer, char* servername, int fd) {
 								assert(send(fd,&qpn,sizeof(qpn),0));
 								assert(send(fd,&psn,sizeof(psn),0));
 
-								//todo the same
+								//receive
+								
 							} else { //server
 								uint16_t lid_peer;
 								wait4data(fd,&lid_peer,sizeof(lid_peer));
@@ -496,22 +516,8 @@ void rdma(char * devname,int isServer, char* servername, int fd) {
 								getReady(qpn_peer,psn_peer,psn,lid_peer,pqp);
 
 								//send
-								struct ibv_sge sge;
-								memset(&sge,0,sizeof(struct ibv_sge));
-								sge.addr = (uintptr_t)pbuf;
-								sge.length = bufsize;
-								sge.lkey = pmr->lkey;
+								ssysend(pbuf,bufsize,pmr,pqp);
 
-								struct ibv_send_wr wr;
-								memset(&wr,0,sizeof(struct ibv_send_wr));
-								wr.next = NULL; //this is used in linked list in driver, I dont use it
-								wr.sg_list = &sge;
-								wr.num_sge = 1;
-								wr.opcode = IBV_WR_SEND;
-
-								struct ibv_send_wr * pbadwr;
-								int ressend = ibv_post_send(pqp,&wr,&pbadwr);
-								assert(ressend == 0);
 							}
 
 							int resdesqp = ibv_destroy_qp(pqp);
