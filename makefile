@@ -1,17 +1,19 @@
-EXECS = query_device.exe
-#MPICC = mpicc
+OBJS = datastruct.o print_rdma.o ssysocket.o query_device.o main.o
+EXES = query_device.exe
 CC = gcc
-#CCFLAG = -fopenmp
 LDFLAG = -libverbs
 
 .DEFAULT_GOAL := all
 
-all: ${EXECS}
+all: ${EXES}
 
-%.exe : %.c
-	${CC} -o $@ $< ${LDFLAG} 
+${EXES} : ${OBJS}
+	${CC} -o $@ $^ ${LDFLAG} 
+
+%.o : %.c
+	${CC} -o $@ -c $<
 
 .PHONY: clean
 
 clean:
-	rm -f ${EXECS}
+	rm -f *.exe ${OBJS}
