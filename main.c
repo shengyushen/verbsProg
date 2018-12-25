@@ -12,25 +12,33 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-#include "def.h"
-#include "datastruct.h"
-#include "print_rdma.h"
-#include "query_device.h"
+//socket exchange parameter
 #include "ssysocket.h"
+//common rdma
+#include "def.h"
+#include "rdma_common.h"
+#include "print_rdma.h"
+//checking device
+#include "chk.h"
+//only for rc test
+#include "rctest.h"
+//for srq rc test
+//#include "srqtest.h"
+
 
 int main(int argc, char** argv) {
 	if(argc<2) {
 		printf("Usage : query_device.exe <operation type> ...\n");
 		printf("        chk\n");
-		printf("        rdma <ib dev name> server\n");
-		printf("        rdma <ib dev name> client <server host name>\n");
+		printf("        rctest <ib dev name> server\n");
+		printf("        rctest <ib dev name> client <server host name>\n");
 		return 0;
 	}
 	//check status
 	if(strcmp(argv[1],"chk") == 0)
-		check_status();
-	else if(strcmp(argv[1],"rdma") == 0) {
-	//allocate context
+		chk();
+	else if(strcmp(argv[1],"rctest") == 0) {
+		//testing rdma
 		int isServer;
 		char * pServerHostNmae = NULL;
 		assert(argc>=4);
@@ -43,7 +51,7 @@ int main(int argc, char** argv) {
 		} else assert(0);
 		int confd;
 		int fd = init_socket(isServer,pServerHostNmae,&confd);
-		rdma(argv[2],isServer,pServerHostNmae,isServer?confd:fd);
+		rctest(argv[2],isServer,pServerHostNmae,isServer?confd:fd);
 		if(isServer) 
 			close(confd);
 

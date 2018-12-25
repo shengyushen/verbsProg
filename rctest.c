@@ -13,15 +13,15 @@
 #include <arpa/inet.h>
 
 #include "def.h"
-#include "datastruct.h"
+#include "rdma_common.h"
 #include "print_rdma.h"
-#include "query_device.h"
+#include "rctest.h"
 #include "ssysocket.h"
 
 
 
 
-void connect_rdma (uint32_t qpn_peer,uint32_t psn_peer,uint32_t psn,uint16_t lid_peer,struct ssy_context * pssyctx) {
+void connect_rc (uint32_t qpn_peer,uint32_t psn_peer,uint32_t psn,uint16_t lid_peer,struct rctest_context * pssyctx) {
 	struct ibv_qp_attr attr;
 	memset(&attr,0,sizeof(attr));
 
@@ -92,7 +92,7 @@ void getDevice_rdma(char * devname,struct ibv_device ** ppActiveDev,struct ibv_d
 	*pppdev=ppdev;
 }
 
-void send_rdma(void * pbuf,int bufsize, struct ibv_mr * pmr,struct ibv_qp * pqp) {
+void send_rc(void * pbuf,int bufsize, struct ibv_mr * pmr,struct ibv_qp * pqp) {
 	struct ibv_sge sge;
 	memset(&sge,0,sizeof(sge));
 	sge.addr = (uintptr_t)pbuf;
@@ -112,7 +112,7 @@ void send_rdma(void * pbuf,int bufsize, struct ibv_mr * pmr,struct ibv_qp * pqp)
 	assert(ressend == 0);
 }
 
-void recv_rdma(struct ssy_context * pssyctx) {
+void recv_rc(struct rctest_context * pssyctx) {
 	struct ibv_sge sge;
 	memset(&sge,0,sizeof(sge));
 	sge.addr = (uintptr_t)(pssyctx->pbuf);
@@ -129,7 +129,7 @@ void recv_rdma(struct ssy_context * pssyctx) {
 	assert (resrecv ==0);
 }
 
-void wait4Comp_rdma(struct ssy_context * pssyctx) {
+void wait4Comp_rc(struct rctest_context * pssyctx) {
 	struct ibv_wc wc;
 	int num_comp;
 	do {
@@ -143,8 +143,8 @@ void wait4Comp_rdma(struct ssy_context * pssyctx) {
 
 
 
-struct ssy_context * create_ssy_context(char * devname) {
-	struct ssy_context * pssyctx = malloc(sizeof(struct ssy_context));
+struct rctest_context * create_rctest_context(char * devname) {
+	struct rctest_context * pssyctx = malloc(sizeof(struct rctest_context));
 
 	getDevice_rdma(devname,&(pssyctx -> pActiveDev),&(pssyctx->ppdev));
 	pssyctx->pctx = ibv_open_device(pssyctx->pActiveDev);
@@ -186,7 +186,7 @@ struct ssy_context * create_ssy_context(char * devname) {
 	pssyctx->pqp = ibv_create_qp(pssyctx->ppd,&(pssyctx->qpinitattr));
 }
 
-void destroy_ssy_context(struct ssy_context * pssyctx) {
+void destroy_rctest_context(struct rctest_context * pssyctx) {
 	int resdesqp = ibv_destroy_qp(pssyctx->pqp);
 	assert(resdesqp==0);
 
@@ -208,9 +208,9 @@ void destroy_ssy_context(struct ssy_context * pssyctx) {
 	ibv_free_device_list(pssyctx->ppdev);
 }
 
-void rdma(char * devname,int isServer, char* servername, int fd) {
+void rctest(char * devname,int isServer, char* servername, int fd) {
 
-	struct ssy_context * pssyctx = create_ssy_context(devname);
+	struct rctest_context * pssyctx = create_rctest_context(devname);
 
 	//get related lid and qpn for communicated between each other
 	uint16_t lid= getLid(pssyctx->pctx);
@@ -232,12 +232,12 @@ void rdma(char * devname,int isServer, char* servername, int fd) {
 	printf("receive psn : %d\n",psn_peer);
 
 	//connect
-	connect_rdma(qpn_peer,psn_peer,psn,lid_peer,pssyctx);
+	connect_rc(qpn_peer,psn_peer,psn,lid_peer,pssyctx);
 	if(!isServer) { //client
 		//receive
 		//sleep(5);
-		recv_rdma(pssyctx);
-		wait4Comp_rdma(pssyctx);
+		recv_rc(pssyctx);
+		wait4Comp_rc(pssyctx);
 		printf("RDMA receiving \n");
 		for(int i=0;i<pssyctx->bufsize;i++) {
 			//printf("pos %d is %d\n",i,((uint8_t *)pbuf)[i]);
@@ -249,34 +249,15 @@ void rdma(char * devname,int isServer, char* servername, int fd) {
 			((uint8_t *)(pssyctx->pbuf))[i]=i%256;
 			//printf("server pos %d is %d\n",i,((uint8_t *)pbuf)[i]);
 		}
-		send_rdma(pssyctx->pbuf,pssyctx->bufsize,pssyctx->pmr,pssyctx->pqp);
+		send_rc(pssyctx->pbuf,pssyctx->bufsize,pssyctx->pmr,pssyctx->pqp);
 		for(int i=0;i<pssyctx->bufsize;i++) {
 			assert((i%256) == ((uint8_t *)(pssyctx->pbuf))[i]);
 		}
 		printf("server finish sending,waiting for completion\n");
-		wait4Comp_rdma(pssyctx);
+		wait4Comp_rc(pssyctx);
 	}
 
-	destroy_ssy_context(pssyctx);
+	destroy_rctest_context(pssyctx);
 
-}
-
-void check_status() {
-	int num_dev;
-	struct ibv_device ** ppdev = ibv_get_device_list(&num_dev);
-	printf("num_dev %d\n",num_dev);
-	
-	//the list of dev
-	for(int i=num_dev-1;i>=0;i--) {
-		printf("============= Dev %s ===============\n",ppdev[i]->name);
-		print_ibv_device(ppdev[i]);
-
-		struct ibv_context * pctx = ibv_open_device(ppdev[i]);
-		print_ibv_context(ppdev[i],pctx);
-		ibv_close_device(pctx);
-
-		printf("\n");
-	}
-	ibv_free_device_list(ppdev);
 }
 

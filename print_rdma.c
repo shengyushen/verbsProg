@@ -1,5 +1,5 @@
 #include "print_rdma.h"
-#include "datastruct.h"
+#include "rdma_common.h"
 
 void print_ibv_node_type(enum ibv_node_type node_type) {
 	printf("node_type : %s\n",ibv_node_type_str(node_type));
