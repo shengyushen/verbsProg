@@ -8,10 +8,10 @@ LDFLAG = -libverbs
 all: ${EXES}
 
 ${EXES} : ${OBJS}
-	${CC} -o $@ $^ ${LDFLAG} 
+	${CC} -g -o $@ $^ ${LDFLAG} 
 
 %.o : %.c
-	${CC} -o $@ -c $<
+	${CC} -g -o $@ -c $<
 
 .PHONY: clean
 

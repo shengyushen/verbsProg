@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdbool.h>
 
 #include <infiniband/verbs.h>
 #include <infiniband/verbs_exp.h>
@@ -12,10 +13,11 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-//socket exchange parameter
-#include "ssysocket.h"
 //common rdma
 #include "def.h"
+#include "main.h"
+//socket exchange parameter
+#include "ssysocket.h"
 #include "rdma_common.h"
 #include "print_rdma.h"
 //checking device
@@ -25,6 +27,26 @@
 //for srq rc test
 //#include "srqtest.h"
 
+bool isserver(int argc, char ** argv,char** ppServerHostNmae) {
+	bool isServer;
+	assert(argc>=4);
+	if(strcmp(argv[3],"server")==0)  {
+		isServer = true ;
+	} else if (strcmp(argv[3],"client") == 0) {
+		assert(argc>=5);
+		isServer = false ;
+		*ppServerHostNmae = argv[4];
+	} else assert(0);
+	return isServer;
+}
+
+bool issrq(int argc, char** argv) {
+	return (strcmp(argv[1],"srqtest")==0);
+}
+
+bool isrc(int argc, char** argv) {
+	return (strcmp(argv[1],"rctest")==0);
+}
 
 int main(int argc, char** argv) {
 	if(argc<2) {
@@ -37,26 +59,31 @@ int main(int argc, char** argv) {
 	//check status
 	if(strcmp(argv[1],"chk") == 0)
 		chk();
-	else if(strcmp(argv[1],"rctest") == 0) {
-		//testing rdma
-		int isServer;
-		char * pServerHostNmae = NULL;
-		assert(argc>=4);
-		if(strcmp(argv[3],"server")==0)  {
-			isServer = 1 ;
-		} else if (strcmp(argv[3],"client") == 0) {
-			assert(argc>=5);
-			isServer = 0 ;
-			pServerHostNmae = argv[4];
-		} else assert(0);
-		int confd;
-		int fd = init_socket(isServer,pServerHostNmae,&confd);
-		rctest(argv[2],isServer,pServerHostNmae,isServer?confd:fd);
-		if(isServer) 
-			close(confd);
+	else if(
+		isrc(argc,argv) || 
+		issrq(argc,argv) 
+	) { //testing rdma
+		struct arg_ctx arg_ctx;
+		//find out the server and client
+		arg_ctx.isServer = isserver(argc,argv,&(arg_ctx.pServerHostNmae));
 
+		//init the socket to exchange the parameters
+		int confd;
+		int fd = init_socket(arg_ctx.isServer,arg_ctx.pServerHostNmae,&confd);
+		arg_ctx.sockfd = arg_ctx.isServer?confd:fd;
+
+		arg_ctx.pDevname = argv[2];
+
+		arg_ctx.issrq=issrq(argc,argv);
+
+		//real test
+		rctest(&arg_ctx);
+
+		if(arg_ctx.isServer) 
+			close(confd);
 		close(fd);
-		if(isServer)
+
+		if(arg_ctx.isServer)
 			printf("server exit\n");
 		else
 			printf("client exit\n");

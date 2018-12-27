@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdbool.h>
 
 #include <infiniband/verbs.h>
 #include <infiniband/verbs_exp.h>
@@ -13,15 +14,103 @@
 #include <arpa/inet.h>
 
 #include "def.h"
+#include "main.h"
 #include "rdma_common.h"
 #include "print_rdma.h"
 #include "rctest.h"
 #include "ssysocket.h"
 
+//FUNCTION
+void 
+getDevice_rdma
+(
+	char * devname,
+	struct ibv_device ** ppActiveDev,
+	struct ibv_device *** pppdev
+) {
+	int num_dev;
+	struct ibv_device ** ppdev = ibv_get_device_list(&num_dev);
+	//the list of dev
+	for(int i=num_dev-1;i>=0;i--) {
+		if(strcmp(ppdev[i]->name,devname) == 0) {
+			*ppActiveDev = ppdev[i];
+			break;
+		}
+	}
+	assert(*ppActiveDev);
+	*pppdev=ppdev;
+}
 
 
+//FUNCTION
+struct rctest_context * 
+create_rctest_context(
+	char * devname, 
+	bool issrq
+) {
+	struct rctest_context * pssyctx = malloc(sizeof(struct rctest_context));
 
-void connect_rc (uint32_t qpn_peer,uint32_t psn_peer,uint32_t psn,uint16_t lid_peer,struct rctest_context * pssyctx) {
+	getDevice_rdma(devname,&(pssyctx -> pActiveDev),&(pssyctx->ppdev));
+	pssyctx->pctx = ibv_open_device(pssyctx->pActiveDev);
+
+	//allocate pd
+	pssyctx->ppd = ibv_alloc_pd(pssyctx->pctx);
+	assert(pssyctx->ppd);
+	assert(pssyctx->ppd->context == pssyctx->pctx);
+
+	//memory alloc
+	pssyctx->align_pagesize = sysconf(_SC_PAGESIZE);
+	pssyctx->bufsize = 1024;
+	posix_memalign(&(pssyctx -> pbuf),pssyctx->align_pagesize,pssyctx -> bufsize);
+
+	//memory registering
+	pssyctx -> perm = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_ATOMIC | IBV_ACCESS_MW_BIND | IBV_ACCESS_ZERO_BASED;
+	pssyctx->pmr = ibv_reg_mr(pssyctx->ppd,pssyctx->pbuf,pssyctx -> bufsize,pssyctx->perm);
+
+	//completion channel
+	pssyctx-> pCompCh  = ibv_create_comp_channel( pssyctx->pctx );
+	assert(pssyctx -> pCompCh);
+
+	//completion queue
+	pssyctx->sqe_num = 1;
+	pssyctx->rqe_num = 1024;
+	//forcing the number of cqe to hold all sqe and rqe
+	pssyctx->cqe_num = pssyctx->sqe_num + pssyctx->rqe_num ;
+	pssyctx -> pcq = ibv_create_cq(pssyctx->pctx,pssyctx->cqe_num , NULL ,  // NULL means no private cq_context
+																			pssyctx->pCompCh ,0  // 0 means empty vector
+																			);
+	assert(pssyctx -> pcq);
+
+	if(issrq) { //working on srq
+		struct ibv_srq_init_attr attr;
+		memset(&attr,0,sizeof(attr));
+	//	attr.attr.max_wr = 
+	}
+
+	// creating qp
+	memset(&(pssyctx->qpinitattr),0,sizeof(struct ibv_qp_init_attr));
+	(pssyctx->qpinitattr).send_cq = pssyctx->pcq;
+	(pssyctx->qpinitattr).recv_cq =pssyctx-> pcq;
+	(pssyctx->qpinitattr).cap.max_send_wr = pssyctx->sqe_num;
+	(pssyctx->qpinitattr).cap.max_recv_wr = pssyctx->rqe_num;
+	(pssyctx->qpinitattr).cap.max_send_sge = 1;
+	(pssyctx->qpinitattr).cap.max_recv_sge = 1;
+	(pssyctx->qpinitattr).qp_type = IBV_QPT_RC;
+
+	pssyctx->pqp = ibv_create_qp(pssyctx->ppd,&(pssyctx->qpinitattr));
+}
+
+
+//FUNCTION
+void 
+connect_rc 
+(
+	uint32_t qpn_peer,
+	uint32_t psn_peer,
+	uint32_t psn,
+	uint16_t lid_peer,
+	struct rctest_context * pssyctx
+) {
 	struct ibv_qp_attr attr;
 	memset(&attr,0,sizeof(attr));
 
@@ -78,21 +167,15 @@ void connect_rc (uint32_t qpn_peer,uint32_t psn_peer,uint32_t psn,uint16_t lid_p
 	assert(resmod == 0);
 }
 
-void getDevice_rdma(char * devname,struct ibv_device ** ppActiveDev,struct ibv_device *** pppdev) {
-	int num_dev;
-	struct ibv_device ** ppdev = ibv_get_device_list(&num_dev);
-	//the list of dev
-	for(int i=num_dev-1;i>=0;i--) {
-		if(strcmp(ppdev[i]->name,devname) == 0) {
-			*ppActiveDev = ppdev[i];
-			break;
-		}
-	}
-	assert(*ppActiveDev);
-	*pppdev=ppdev;
-}
 
-void send_rc(void * pbuf,int bufsize, struct ibv_mr * pmr,struct ibv_qp * pqp) {
+//FUNCTION
+void 
+send_rc(
+	void * pbuf,
+	int bufsize, 
+	struct ibv_mr * pmr,
+	struct ibv_qp * pqp
+) {
 	struct ibv_sge sge;
 	memset(&sge,0,sizeof(sge));
 	sge.addr = (uintptr_t)pbuf;
@@ -112,7 +195,12 @@ void send_rc(void * pbuf,int bufsize, struct ibv_mr * pmr,struct ibv_qp * pqp) {
 	assert(ressend == 0);
 }
 
-void recv_rc(struct rctest_context * pssyctx) {
+
+//FUNCTION
+void 
+recv_rc(
+	struct rctest_context * pssyctx
+) {
 	struct ibv_sge sge;
 	memset(&sge,0,sizeof(sge));
 	sge.addr = (uintptr_t)(pssyctx->pbuf);
@@ -129,6 +217,7 @@ void recv_rc(struct rctest_context * pssyctx) {
 	assert (resrecv ==0);
 }
 
+//FUNCTION
 void wait4Comp_rc(struct rctest_context * pssyctx) {
 	struct ibv_wc wc;
 	int num_comp;
@@ -140,77 +229,31 @@ void wait4Comp_rc(struct rctest_context * pssyctx) {
 	assert(wc.status == IBV_WC_SUCCESS);
 }
 
-
-
-
-struct rctest_context * create_rctest_context(char * devname) {
-	struct rctest_context * pssyctx = malloc(sizeof(struct rctest_context));
-
-	getDevice_rdma(devname,&(pssyctx -> pActiveDev),&(pssyctx->ppdev));
-	pssyctx->pctx = ibv_open_device(pssyctx->pActiveDev);
-
-	//allocate pd
-	pssyctx->ppd = ibv_alloc_pd(pssyctx->pctx);
-	assert(pssyctx->ppd);
-	assert(pssyctx->ppd->context == pssyctx->pctx);
-
-	//memory alloc
-	pssyctx->bufsize = 1024;
-	pssyctx->pbuf = malloc(pssyctx -> bufsize);
-
-	//memory registering
-	pssyctx -> perm = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_ATOMIC | IBV_ACCESS_MW_BIND | IBV_ACCESS_ZERO_BASED;
-	pssyctx->pmr = ibv_reg_mr(pssyctx->ppd,pssyctx->pbuf,pssyctx -> bufsize,pssyctx->perm);
-
-	//completion channel
-	pssyctx-> pCompCh  = ibv_create_comp_channel( pssyctx->pctx );
-	assert(pssyctx -> pCompCh);
-
-	//completion queue
-	pssyctx->cqe_num = 1024 ;
-	pssyctx -> pcq = ibv_create_cq(pssyctx->pctx,pssyctx->cqe_num , NULL ,  // NULL means no private cq_context
-																			pssyctx->pCompCh ,0  // 0 means empty vector
-																			);
-	assert(pssyctx -> pcq);
-
-	// creating qp
-	memset(&(pssyctx->qpinitattr),0,sizeof(struct ibv_qp_init_attr));
-	(pssyctx->qpinitattr).send_cq = pssyctx->pcq;
-	(pssyctx->qpinitattr).recv_cq =pssyctx-> pcq;
-	(pssyctx->qpinitattr).cap.max_send_wr = 1;
-	(pssyctx->qpinitattr).cap.max_recv_wr = 100;
-	(pssyctx->qpinitattr).cap.max_send_sge = 1;
-	(pssyctx->qpinitattr).cap.max_recv_sge = 1;
-	(pssyctx->qpinitattr).qp_type = IBV_QPT_RC;
-
-	pssyctx->pqp = ibv_create_qp(pssyctx->ppd,&(pssyctx->qpinitattr));
-}
-
-void destroy_rctest_context(struct rctest_context * pssyctx) {
-	int resdesqp = ibv_destroy_qp(pssyctx->pqp);
-	assert(resdesqp==0);
-
-	int rescq = ibv_destroy_cq(pssyctx->pcq);
-	assert(rescq == 0);
-
-	int resch = ibv_destroy_comp_channel(pssyctx->pCompCh);
-	assert(resch==0);
-				
-	int resMr = ibv_dereg_mr(pssyctx->pmr);
-	assert(resMr==0);
-
+//FUNCTION
+void 
+destroy_rctest_context
+(
+	struct rctest_context * pssyctx
+) {
+	assert( ibv_destroy_qp(pssyctx->pqp) == 0 );
+	assert( ibv_destroy_cq(pssyctx->pcq) == 0 );
+	assert( ibv_destroy_comp_channel(pssyctx->pCompCh) == 0 );
+	assert( ibv_dereg_mr(pssyctx->pmr) ==0 ) ;
 	free(pssyctx->pbuf);
-
-	int res1 = ibv_dealloc_pd(pssyctx->ppd);
-	assert(res1==0);
-
-	ibv_close_device(pssyctx->pctx);
+	assert( ibv_dealloc_pd(pssyctx->ppd) == 0 );
+	assert( ibv_close_device(pssyctx->pctx) == 0 );
 	ibv_free_device_list(pssyctx->ppdev);
+	free(pssyctx);
 }
 
-void rctest(char * devname,int isServer, char* servername, int fd) {
 
-	struct rctest_context * pssyctx = create_rctest_context(devname);
+//FUNCTION
+void 
+rctest(
+	struct arg_ctx * pargctx
+) {
+
+	struct rctest_context * pssyctx = create_rctest_context(pargctx->pDevname,pargctx->issrq);
 
 	//get related lid and qpn for communicated between each other
 	uint16_t lid= getLid(pssyctx->pctx);
@@ -223,9 +266,9 @@ void rctest(char * devname,int isServer, char* servername, int fd) {
 	uint16_t lid_peer;
 	uint32_t qpn_peer;
 	uint32_t psn_peer;
-	exchangeParm_socket(&lid,sizeof(lid),&lid_peer,sizeof(lid_peer),fd);
-	exchangeParm_socket(&qpn,sizeof(qpn),&qpn_peer,sizeof(qpn_peer),fd);
-	exchangeParm_socket(&psn,sizeof(psn),&psn_peer,sizeof(psn_peer),fd);
+	exchangeParm_socket(&lid,sizeof(lid),&lid_peer,sizeof(lid_peer),pargctx->sockfd);
+	exchangeParm_socket(&qpn,sizeof(qpn),&qpn_peer,sizeof(qpn_peer),pargctx->sockfd);
+	exchangeParm_socket(&psn,sizeof(psn),&psn_peer,sizeof(psn_peer),pargctx->sockfd);
 
 	printf("receive lid : %d\n",lid_peer);
 	printf("receive qpn : %d\n",qpn_peer);
@@ -233,7 +276,7 @@ void rctest(char * devname,int isServer, char* servername, int fd) {
 
 	//connect
 	connect_rc(qpn_peer,psn_peer,psn,lid_peer,pssyctx);
-	if(!isServer) { //client
+	if(!(pargctx->isServer)) { //client
 		//receive
 		//sleep(5);
 		recv_rc(pssyctx);

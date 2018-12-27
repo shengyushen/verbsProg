@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdbool.h>
 
 #include <infiniband/verbs.h>
 #include <infiniband/verbs_exp.h>
@@ -11,10 +12,36 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 
 #include "def.h"
 
-int init_socket(int isServer, char* servername,int * pconfd) {
+void hostname2ip(char* phostname,char * pres) {
+	struct addrinfo hints, *infoptr; // So no need to use memset global variables
+	memset(&hints,0,sizeof(hints));
+	memset(&infoptr,0,sizeof(infoptr));
+  hints.ai_family = AF_INET; // AF_INET means IPv4 only addresses
+
+  int result = getaddrinfo(phostname, NULL, &hints, &infoptr);
+  if (result) {
+      fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(result));
+      exit(1);
+  }
+
+  struct addrinfo *p;
+  char host[256];
+
+  for (p = infoptr; p != NULL; p = p->ai_next) {
+      getnameinfo(p->ai_addr, p->ai_addrlen, host, sizeof (host), NULL, 0, NI_NUMERICHOST);
+			strcpy(pres,host);
+			//printf("%s\n",pres);
+			break;
+  }
+
+  freeaddrinfo(infoptr);
+}
+
+int init_socket(bool isServer, char* servername,int * pconfd) {
 	int listenfd=socket(AF_INET , SOCK_STREAM ,0);
 	assert(listenfd != -1);
 
@@ -37,6 +64,9 @@ int init_socket(int isServer, char* servername,int * pconfd) {
 		*pconfd=confd;
 	} else {
 		//client
+		char pipaddr[100];
+		//hostname2ip(servername,pipaddr);
+		//int ptonres = inet_pton(AF_INET , pipaddr, & servaddr.sin_addr);
 		int ptonres = inet_pton(AF_INET , servername, & servaddr.sin_addr);
 		assert(ptonres >0);
 		int connres = connect(listenfd,(struct sockaddr*)&servaddr,sizeof(servaddr));
