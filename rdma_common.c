@@ -5,7 +5,7 @@
 #include <unistd.h>
 
 #include <infiniband/verbs.h>
-#include <infiniband/verbs_exp.h>
+//#include <infiniband/verbs_exp.h>
 
 #include <sys/types.h>
 #include <sys/socket.h>

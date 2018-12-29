@@ -1,6 +1,74 @@
 #include "print_rdma.h"
 #include "rdma_common.h"
 
+void print_ibv_wc_flags(int wc_flags) {
+	if(wc_flags | IBV_WC_GRH) printf("IBV_WC_GRH\n");
+	if(wc_flags | IBV_WC_WITH_IMM) printf("IBV_WC_WITH_IMM\n");
+	if(wc_flags | IBV_WC_WITH_INV) printf("IBV_WC_WITH_INV\n");
+}
+
+void print_ibv_opcode(enum ibv_wc_opcode op) {
+	switch (op) {
+		case IBV_WC_SEND : printf("IBV_WC_SEND");break;
+		case IBV_WC_RDMA_WRITE : printf("IBV_WC_RDMA_WRITE");break;
+		case IBV_WC_RDMA_READ : printf("IBV_WC_RDMA_READ");break;
+		case IBV_WC_COMP_SWAP : printf("IBV_WC_COMP_SWAP");break;
+		case IBV_WC_FETCH_ADD : printf("IBV_WC_FETCH_ADD");break;
+		case IBV_WC_BIND_MW : printf("IBV_WC_BIND_MW");break;
+		case IBV_WC_LOCAL_INV : printf("IBV_WC_LOCAL_INV");break;
+		case IBV_WC_RECV : printf("IBV_WC_RECV");break;
+		case IBV_WC_RECV_RDMA_WITH_IMM : printf("IBV_WC_RECV_RDMA_WITH_IMM");break;
+		default : assert(0);
+	}
+	printf("\n");
+}
+
+void print_ibv_wc_status(enum ibv_wc_status st) {
+	switch(st) {
+		case IBV_WC_SUCCESS:								printf("IBV_WC_SUCCESS");break;
+		case IBV_WC_LOC_LEN_ERR:            printf("IBV_WC_LOC_LEN_ERR");break;
+		case IBV_WC_LOC_QP_OP_ERR:          printf("IBV_WC_LOC_QP_OP_ERR");break;
+		case IBV_WC_LOC_EEC_OP_ERR:         printf("IBV_WC_LOC_EEC_OP_ERR");break;
+		case IBV_WC_LOC_PROT_ERR:           printf("IBV_WC_LOC_PROT_ERR");break;
+		case IBV_WC_WR_FLUSH_ERR:           printf("IBV_WC_WR_FLUSH_ERR");break;
+		case IBV_WC_MW_BIND_ERR:            printf("IBV_WC_MW_BIND_ERR");break;
+		case IBV_WC_BAD_RESP_ERR:           printf("IBV_WC_BAD_RESP_ERR");break;
+		case IBV_WC_LOC_ACCESS_ERR:         printf("IBV_WC_LOC_ACCESS_ERR");break;
+		case IBV_WC_REM_INV_REQ_ERR:        printf("IBV_WC_REM_INV_REQ_ERR");break;
+		case IBV_WC_REM_ACCESS_ERR:         printf("IBV_WC_REM_ACCESS_ERR");break;
+		case IBV_WC_REM_OP_ERR:             printf("IBV_WC_REM_OP_ERR");break;
+		case IBV_WC_RETRY_EXC_ERR:          printf("IBV_WC_RETRY_EXC_ERR");break;
+		case IBV_WC_RNR_RETRY_EXC_ERR:      printf("IBV_WC_RNR_RETRY_EXC_ERR");break;
+		case IBV_WC_LOC_RDD_VIOL_ERR:       printf("IBV_WC_LOC_RDD_VIOL_ERR");break;
+		case IBV_WC_REM_INV_RD_REQ_ERR:     printf("IBV_WC_REM_INV_RD_REQ_ERR");break;
+		case IBV_WC_REM_ABORT_ERR:          printf("IBV_WC_REM_ABORT_ERR");break;
+		case IBV_WC_INV_EECN_ERR:           printf("IBV_WC_INV_EECN_ERR");break;
+		case IBV_WC_INV_EEC_STATE_ERR:      printf("IBV_WC_INV_EEC_STATE_ERR");break;
+		case IBV_WC_FATAL_ERR:              printf("IBV_WC_FATAL_ERR");break;
+		case IBV_WC_RESP_TIMEOUT_ERR:       printf("IBV_WC_RESP_TIMEOUT_ERR");break;
+		case IBV_WC_GENERAL_ERR:					  printf("IBV_WC_GENERAL_ERR");break;
+		default : assert(0);
+	}
+	printf("\n");
+}
+
+void print_ibv_wc(struct ibv_wc * pwc) {
+	printf("wr_id is %ld\n",pwc->wr_id);
+	print_ibv_wc_status(pwc->status);
+	print_ibv_opcode(pwc->opcode);
+	printf("vendor_err %d\n",pwc->vendor_err);
+	printf("byte_len %d\n",pwc->byte_len);
+	printf("imm_data %d\n",pwc->imm_data);
+	printf("qp_num %d\n",pwc->qp_num);
+	printf("src_qp %d\n",pwc->src_qp);
+	print_ibv_wc_flags(pwc->wc_flags);
+	printf("pkey_index %d\n",pwc->pkey_index);
+	printf("slid %d\n",pwc->slid);
+	printf("sl %d\n",pwc->sl);
+	printf("dlid_path_bits %d\n",pwc->dlid_path_bits);
+}
+
+
 void print_ibv_node_type(enum ibv_node_type node_type) {
 	printf("node_type : %s\n",ibv_node_type_str(node_type));
 	//switch(node_type) {

@@ -224,6 +224,10 @@ void wait4Comp_rc(struct rctest_context * pssyctx) {
 	do {
 		num_comp = ibv_poll_cq(pssyctx->pcq,1,&wc);
 	} while(num_comp == 0);
+	
+	printf("======ibv_wc start=========");
+	print_ibv_wc(&wc);
+	printf("======ibv_wc end=========");
 
 	assert(num_comp >=0);
 	assert(wc.status == IBV_WC_SUCCESS);

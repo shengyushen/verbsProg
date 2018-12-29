@@ -12,6 +12,9 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
+void print_ibv_wc(struct ibv_wc * pwd);
+void print_ibv_opcode(enum ibv_wc_opcode op);
+void print_ibv_wc_status(enum ibv_wc_status st);
 void print_ibv_node_type(enum ibv_node_type node_type);
 void print_ibv_transport_type(enum ibv_transport_type tp);
 void print_ibv_atomic_cap(enum ibv_atomic_cap acap);

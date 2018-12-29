@@ -65,9 +65,9 @@ int init_socket(bool isServer, char* servername,int * pconfd) {
 	} else {
 		//client
 		char pipaddr[100];
-		//hostname2ip(servername,pipaddr);
-		//int ptonres = inet_pton(AF_INET , pipaddr, & servaddr.sin_addr);
-		int ptonres = inet_pton(AF_INET , servername, & servaddr.sin_addr);
+		hostname2ip(servername,pipaddr);
+		int ptonres = inet_pton(AF_INET , pipaddr, & servaddr.sin_addr);
+		//int ptonres = inet_pton(AF_INET , servername, & servaddr.sin_addr);
 		assert(ptonres >0);
 		int connres = connect(listenfd,(struct sockaddr*)&servaddr,sizeof(servaddr));
 		assert(connres>=0);
