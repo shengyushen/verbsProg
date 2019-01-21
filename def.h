@@ -1,4 +1,0 @@
-#define SSY_IBV_PORTNUM 1
-#define SSY_TCP_PORTNUM 666
-#define SSY_QKEY  0
-

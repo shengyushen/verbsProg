@@ -13,7 +13,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-#include "def.h"
+#include "common.h"
 #include "main.h"
 #include "rdma_common.h"
 #include "print_rdma.h"
@@ -46,7 +46,7 @@ getDevice_rdma
 struct rctest_context * 
 create_rctest_context(
 	char * devname, 
-	bool issrq
+	enum test_type_t test_type 
 ) {
 	struct rctest_context * pssyctx = malloc(sizeof(struct rctest_context));
 
@@ -58,14 +58,25 @@ create_rctest_context(
 	assert(pssyctx->ppd);
 	assert(pssyctx->ppd->context == pssyctx->pctx);
 
+	//for psend
 	//memory alloc
-	pssyctx->align_pagesize = sysconf(_SC_PAGESIZE);
-	pssyctx->bufsize = 1024;
-	posix_memalign(&(pssyctx -> pbuf),pssyctx->align_pagesize,pssyctx -> bufsize);
-
+	pssyctx->psend = malloc(sizeof(struct buffer_entry));
+	pssyctx->psend->align_pagesize = sysconf(_SC_PAGESIZE);
+	pssyctx->psend->bufsize = 1024;
+	posix_memalign(&(pssyctx ->psend-> pbuf),pssyctx->psend->align_pagesize,pssyctx ->psend-> bufsize);
 	//memory registering
-	pssyctx -> perm = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_ATOMIC | IBV_ACCESS_MW_BIND | IBV_ACCESS_ZERO_BASED;
-	pssyctx->pmr = ibv_reg_mr(pssyctx->ppd,pssyctx->pbuf,pssyctx -> bufsize,pssyctx->perm);
+	pssyctx->psend -> perm = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_ATOMIC | IBV_ACCESS_MW_BIND | IBV_ACCESS_ZERO_BASED;
+	pssyctx->psend ->pmr = ibv_reg_mr(pssyctx->ppd,pssyctx->psend->pbuf,pssyctx ->psend-> bufsize,pssyctx->psend->perm);
+
+	//for precv
+	//memory alloc
+	pssyctx->precv = malloc(sizeof(struct buffer_entry));
+	pssyctx->precv->align_pagesize = sysconf(_SC_PAGESIZE);
+	pssyctx->precv->bufsize = 1024;
+	posix_memalign(&(pssyctx ->precv-> pbuf),pssyctx->precv->align_pagesize,pssyctx ->precv-> bufsize);
+	//memory registering
+	pssyctx->precv -> perm = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_ATOMIC | IBV_ACCESS_MW_BIND | IBV_ACCESS_ZERO_BASED;
+	pssyctx->precv ->pmr = ibv_reg_mr(pssyctx->ppd,pssyctx->precv->pbuf,pssyctx ->precv-> bufsize,pssyctx->precv->perm);
 
 	//completion channel
 	pssyctx-> pCompCh  = ibv_create_comp_channel( pssyctx->pctx );
@@ -81,7 +92,7 @@ create_rctest_context(
 																			);
 	assert(pssyctx -> pcq);
 
-	if(issrq) { //working on srq
+	if(issrq(test_type)) { //working on srq
 		struct ibv_srq_init_attr attr;
 		memset(&attr,0,sizeof(attr));
 	//	attr.attr.max_wr = 
@@ -199,13 +210,16 @@ send_rc(
 //FUNCTION
 void 
 recv_rc(
-	struct rctest_context * pssyctx
+	void * pbuf,
+	int bufsize, 
+	struct ibv_mr * pmr,
+	struct ibv_qp * pqp
 ) {
 	struct ibv_sge sge;
 	memset(&sge,0,sizeof(sge));
-	sge.addr = (uintptr_t)(pssyctx->pbuf);
-	sge.length = pssyctx->bufsize;
-	sge.lkey = (pssyctx->pmr)->lkey;
+	sge.addr = (uintptr_t)(pbuf);
+	sge.length = bufsize;
+	sge.lkey = pmr->lkey;
 
 	struct ibv_recv_wr  wr;
 	memset(&wr,0,sizeof(wr));
@@ -213,21 +227,44 @@ recv_rc(
 	wr.sg_list = &sge;
 	wr.num_sge = 1;
 	struct ibv_recv_wr * pbadwr;
-	int resrecv = ibv_post_recv(pssyctx->pqp,&wr,&pbadwr);
+	int resrecv = ibv_post_recv(pqp,&wr,&pbadwr);
 	assert (resrecv ==0);
 }
 
+bool is_wc_wait_empty (struct wc_wait_couter * pwccnt) {
+	return (pwccnt -> recv_cnt ==0) && (pwccnt -> send_cnt ==0);
+}
+
 //FUNCTION
-void wait4Comp_rc(struct rctest_context * pssyctx) {
+void wait4Comp_rc(struct rctest_context * pssyctx, struct wc_wait_couter * pwccnt) {
 	struct ibv_wc wc;
 	int num_comp;
-	do {
+	printf("\n\n\n");
+	while(!is_wc_wait_empty(pwccnt)) {
 		num_comp = ibv_poll_cq(pssyctx->pcq,1,&wc);
-	} while(num_comp == 0);
+		if(num_comp >0 ) {
+			if(wc.status==IBV_WC_SUCCESS) {
+				switch (wc.opcode) {
+					case IBV_WC_RECV : 
+						pwccnt->recv_cnt = pwccnt -> recv_cnt -1;
+						printf("================recv wc================i\n");
+						print_ibv_wc(&wc);
+						break;
+					case IBV_WC_SEND :
+						pwccnt->send_cnt = pwccnt -> send_cnt -1;
+						printf("================send wc=================\n");
+						print_ibv_wc(&wc);
+						break;
+					default : 
+						assert(0);
+				}
+			} else {
+				print_ibv_wc(&wc);
+				assert(0);
+			}
+		}
+	}
 	
-	printf("======ibv_wc start=========");
-	print_ibv_wc(&wc);
-	printf("======ibv_wc end=========");
 
 	assert(num_comp >=0);
 	assert(wc.status == IBV_WC_SUCCESS);
@@ -242,8 +279,15 @@ destroy_rctest_context
 	assert( ibv_destroy_qp(pssyctx->pqp) == 0 );
 	assert( ibv_destroy_cq(pssyctx->pcq) == 0 );
 	assert( ibv_destroy_comp_channel(pssyctx->pCompCh) == 0 );
-	assert( ibv_dereg_mr(pssyctx->pmr) ==0 ) ;
-	free(pssyctx->pbuf);
+
+	assert( ibv_dereg_mr(pssyctx->psend->pmr) ==0 ) ;
+	free(pssyctx->psend->pbuf);
+	free(pssyctx->psend);
+
+	assert( ibv_dereg_mr(pssyctx->precv->pmr) ==0 ) ;
+	free(pssyctx->precv->pbuf);
+	free(pssyctx->precv);
+
 	assert( ibv_dealloc_pd(pssyctx->ppd) == 0 );
 	assert( ibv_close_device(pssyctx->pctx) == 0 );
 	ibv_free_device_list(pssyctx->ppdev);
@@ -251,13 +295,15 @@ destroy_rctest_context
 }
 
 
+
+
 //FUNCTION
 void 
 rctest(
-	struct arg_ctx * pargctx
+	struct arg_ctx_t * pargctx
 ) {
 
-	struct rctest_context * pssyctx = create_rctest_context(pargctx->pDevname,pargctx->issrq);
+	struct rctest_context * pssyctx = create_rctest_context((pargctx->local_prop).pDevname,(pargctx->test_type));
 
 	//get related lid and qpn for communicated between each other
 	uint16_t lid= getLid(pssyctx->pctx);
@@ -270,9 +316,9 @@ rctest(
 	uint16_t lid_peer;
 	uint32_t qpn_peer;
 	uint32_t psn_peer;
-	exchangeParm_socket(&lid,sizeof(lid),&lid_peer,sizeof(lid_peer),pargctx->sockfd);
-	exchangeParm_socket(&qpn,sizeof(qpn),&qpn_peer,sizeof(qpn_peer),pargctx->sockfd);
-	exchangeParm_socket(&psn,sizeof(psn),&psn_peer,sizeof(psn_peer),pargctx->sockfd);
+	exchangeParm_socket(&lid,sizeof(lid),&lid_peer,sizeof(lid_peer),(pargctx->local_prop).sockfd);
+	exchangeParm_socket(&qpn,sizeof(qpn),&qpn_peer,sizeof(qpn_peer),(pargctx->local_prop).sockfd);
+	exchangeParm_socket(&psn,sizeof(psn),&psn_peer,sizeof(psn_peer),(pargctx->local_prop).sockfd);
 
 	printf("receive lid : %d\n",lid_peer);
 	printf("receive qpn : %d\n",qpn_peer);
@@ -280,31 +326,33 @@ rctest(
 
 	//connect
 	connect_rc(qpn_peer,psn_peer,psn,lid_peer,pssyctx);
-	if(!(pargctx->isServer)) { //client
-		//receive
-		//sleep(5);
-		recv_rc(pssyctx);
-		wait4Comp_rc(pssyctx);
-		printf("RDMA receiving \n");
-		for(int i=0;i<pssyctx->bufsize;i++) {
-			//printf("pos %d is %d\n",i,((uint8_t *)pbuf)[i]);
-			assert((i%256) == ((uint8_t *)(pssyctx->pbuf))[i]);
+
+	//init
+	for(int i=0;i<pssyctx->psend->bufsize;i++) {
+		((uint8_t *)(pssyctx->psend -> pbuf))[i]=i%256;
+		//printf("server pos %d is %d\n",i,((uint8_t *)pbuf)[i]);
+	}
+
+	//send
+	send_rc(pssyctx->psend->pbuf,pssyctx->psend -> bufsize,pssyctx->psend->pmr,pssyctx->pqp);
+	//receive
+	recv_rc(pssyctx->precv->pbuf,pssyctx->precv -> bufsize,pssyctx->precv->pmr,pssyctx->pqp);
+
+	struct wc_wait_couter wccnt;
+	wccnt.recv_cnt=1;
+	wccnt.send_cnt=1;
+	wait4Comp_rc(pssyctx,&wccnt);
+	printf("finished waiting for completion\n");
+
+	//checking
+	for(int i=0;i<pssyctx->precv->bufsize;i++) {
+		//printf("pos %d is %d\n",i,((uint8_t *)pbuf)[i]);
+		if((i%256) != ((uint8_t *)(pssyctx->precv->pbuf))[i]) {
+			printf("Error : not matching at i=%d value=%d\n",i,((uint8_t *)(pssyctx->precv->pbuf))[i]);
+			assert(0);
 		}
-	} else { //server
-		//send
-		for(int i=0;i<pssyctx->bufsize;i++) {
-			((uint8_t *)(pssyctx->pbuf))[i]=i%256;
-			//printf("server pos %d is %d\n",i,((uint8_t *)pbuf)[i]);
-		}
-		send_rc(pssyctx->pbuf,pssyctx->bufsize,pssyctx->pmr,pssyctx->pqp);
-		for(int i=0;i<pssyctx->bufsize;i++) {
-			assert((i%256) == ((uint8_t *)(pssyctx->pbuf))[i]);
-		}
-		printf("server finish sending,waiting for completion\n");
-		wait4Comp_rc(pssyctx);
 	}
 
 	destroy_rctest_context(pssyctx);
-
 }
 

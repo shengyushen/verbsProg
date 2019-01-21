@@ -14,7 +14,7 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 
-#include "def.h"
+#include "common.h"
 
 void hostname2ip(char* phostname,char * pres) {
 	struct addrinfo hints, *infoptr; // So no need to use memset global variables
@@ -24,7 +24,7 @@ void hostname2ip(char* phostname,char * pres) {
 
   int result = getaddrinfo(phostname, NULL, &hints, &infoptr);
   if (result) {
-      fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(result));
+      fprintf(stderr, "getaddrinfo for %s : %s\n",phostname, gai_strerror(result));
       exit(1);
   }
 

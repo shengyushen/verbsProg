@@ -47,7 +47,10 @@ void print_ibv_wc_status(enum ibv_wc_status st) {
 		case IBV_WC_FATAL_ERR:              printf("IBV_WC_FATAL_ERR");break;
 		case IBV_WC_RESP_TIMEOUT_ERR:       printf("IBV_WC_RESP_TIMEOUT_ERR");break;
 		case IBV_WC_GENERAL_ERR:					  printf("IBV_WC_GENERAL_ERR");break;
-		default : assert(0);
+		default : 
+			printf("ibv_wc_status is %d\n",st);
+			printf("ibv_wc_status str is %s\n",ibv_wc_status_str(st));
+			assert(0);
 	}
 	printf("\n");
 }

@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdbool.h>
 
 #include <infiniband/verbs.h>
 #include <infiniband/verbs_exp.h>
@@ -12,7 +13,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-#include "def.h"
+#include "common.h"
 #include "rdma_common.h"
 #include "print_rdma.h"
 void chk() {
