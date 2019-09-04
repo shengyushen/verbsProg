@@ -203,7 +203,10 @@ send_rc(
 
 	struct ibv_send_wr * pbadwr;
 	int ressend = ibv_post_send(pqp,&wr,&pbadwr);
-	assert(ressend == 0);
+	if(ressend != 0) {
+		printf("Error : ibv_post_send error %d\n",ressend);
+		assert(0);
+	}
 }
 
 
@@ -334,13 +337,15 @@ rctest(
 	}
 
 	//send
-	send_rc(pssyctx->psend->pbuf,pssyctx->psend -> bufsize,pssyctx->psend->pmr,pssyctx->pqp);
+	for(int i = 0 ; i<pargctx->numpack ; i++)
+		send_rc(pssyctx->psend->pbuf,pssyctx->psend -> bufsize,pssyctx->psend->pmr,pssyctx->pqp);
 	//receive
-	recv_rc(pssyctx->precv->pbuf,pssyctx->precv -> bufsize,pssyctx->precv->pmr,pssyctx->pqp);
+	for(int i = 0 ; i<pargctx->numpack ; i++)
+		recv_rc(pssyctx->precv->pbuf,pssyctx->precv -> bufsize,pssyctx->precv->pmr,pssyctx->pqp);
 
 	struct wc_wait_couter wccnt;
-	wccnt.recv_cnt=1;
-	wccnt.send_cnt=1;
+	wccnt.recv_cnt=pargctx->numpack;
+	wccnt.send_cnt=pargctx->numpack;
 	wait4Comp_rc(pssyctx,&wccnt);
 	printf("finished waiting for completion\n");
 

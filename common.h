@@ -23,6 +23,7 @@ enum test_type_t {
 struct arg_ctx_t {
 	struct arg_ctx_local_t local_prop;
 	enum test_type_t test_type;
+	int numpack;
 	char * pServerHostName; //only make sense when isServer == 1
 };
 

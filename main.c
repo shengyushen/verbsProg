@@ -57,8 +57,8 @@ int main(int argc, char** argv) {
 		printf("Usage : query_device.exe <operation type> ...\n");
 		printf("        chk\n");
 		printf("        server  <ib dev name>\n");
-		printf("        rctest  <ib dev name> <server host name>\n");
-		printf("        srqtest <ib dev name> <server host name>\n");
+		printf("        rctest  <ib dev name> <server host name> <exchange pack number>\n");
+		printf("        srqtest <ib dev name> <server host name> <exchange pack number>\n");
 		return 0;
 	}
 	//check status
@@ -81,12 +81,16 @@ int main(int argc, char** argv) {
 		//test type : get from client
 		wait4data_socket(arg_ctx.local_prop.sockfd,
 				&(arg_ctx.test_type),
-				sizeof(arg_ctx.test_type)
-				);
+				sizeof(arg_ctx.test_type));
 		chk_test_type_t(arg_ctx.test_type);
 		char  pss [100];
 		get_test_type_str(arg_ctx.test_type,pss);
 		printf("Server : client test type %s\n",pss);
+
+		wait4data_socket(arg_ctx.local_prop.sockfd,
+				&(arg_ctx.numpack),
+				sizeof(arg_ctx.numpack));
+		printf("Server : numpack %d\n",arg_ctx.numpack);
 
 		rctest(&arg_ctx);
 		
@@ -95,11 +99,16 @@ int main(int argc, char** argv) {
 		printf("server exit\n");
 	} else if( isrctest(argc,argv) || issrqtest(argc,argv) ) { //testing rdma
 		// client side
+		assert(argc==5);
 
 		//find out the server and client
 		arg_ctx.local_prop.isServer = false;
 		//client side know the server name
 		arg_ctx.pServerHostName = argv[3];
+		//set the number of pack to be exchanged
+		int numpack=0;
+		assert(sscanf(argv[4],"%d",&numpack)==1);
+		arg_ctx.numpack = numpack;
 
 		//init the socket to exchange the parameters
 		int confd;
@@ -114,6 +123,7 @@ int main(int argc, char** argv) {
 		fill_test_type(argc,argv,&(arg_ctx.test_type));
 		//exchange the test type
 		assert(send(fd,&(arg_ctx.test_type),sizeof(arg_ctx.test_type),0));
+		assert(send(fd,&(arg_ctx.numpack),sizeof(arg_ctx.numpack),0));
 
 		//real test
 		rctest(&arg_ctx);
